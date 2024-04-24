@@ -1,0 +1,59 @@
+library(tidyverse)
+
+library(bibliometrix)   ### load bibliometrix package
+
+file <- "SDG_TI_TO_2024.bib"
+
+M <- convert2df(file = file, dbsource = "wos", format = "bibtex")
+
+#do bibliometric anlaysis
+
+results <- biblioAnalysis(M, sep = ";")
+
+#main information about data
+options(width=100)
+S <- summary(object = results, k = 10, pause = FALSE)
+
+#plot most productive authors
+plot(results, k = 10, pause = FALSE)
+
+#cited references
+CR <- citations(M, field = "article", sep = ";")
+cbind(CR$Cited[1:10])
+#most frequent cited first authors
+CR <- citations(M, field = "author", sep = ";")
+cbind(CR$Cited[1:11])
+
+#most frequent local citations
+CR <- localCitations(M, sep = ";")
+CR$Authors[1:10,]
+CR$Papers[1:10,]
+
+#bipartite networks
+A <- cocMatrix(M, Field = "SO", sep = ";")
+#citation network
+A <- cocMatrix(M, Field = "CR", sep = ".  ")
+sort(Matrix::colSums(A), decreasing = TRUE)[1:5]
+
+#Bibligrpahic coupling
+NetMatrix <- biblioNetwork(M, analysis = "coupling", network = "references", sep = ".  ")
+#bibliographic co-citation
+NetMatrix <- biblioNetwork(M, analysis = "co-citation", network = "references", sep = ".  ")
+
+# Create keyword co-occurrences network
+
+NetMatrix <- biblioNetwork(M, analysis = "co-occurrences", network = "keywords", sep = ";")
+
+# Plot the network
+net=networkPlot(NetMatrix, normalize="association", weighted=T, n = 30, Title = "Keyword Co-occurrences", type = "fruchterman", size=T,edgesize = 5,labelsize=0.7)
+
+#co-word analysis
+# Conceptual Structure using keywords (method="CA")
+
+CS <- conceptualStructure(M,field="TI", method="CA", minDegree=4, clust=5, stemming=TRUE, labelsize=10, documents=10)
+
+## Create a historical citation network
+options(width=130)
+histResults <- histNetwork(M, min.citations = 1, sep = ";")
+# Plot a historical co-citation network
+net <- histPlot(histResults, n=15, size = 10, labelsize=5)

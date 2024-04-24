@@ -1,0 +1,596 @@
+
+library(readtext)
+library(readxl)
+library(readr)
+library(stringr)
+library(stringi)
+library(tidyverse)
+library(stm)
+library(quanteda)
+library(broom)
+library(quanteda.textstats)
+library(data.table)
+
+#BEGIN VANAF HIER
+#read file list to check
+fl <- list.files('./docs/raw')
+length(fl)
+write.csv(fl, "filelist.txt")
+#met notepad++ via regex (.*\r?\n){25}\K vervangen door '$0##' of '##\n' in elk bestand elke 25 regels een ## aangebracht (in alle documenten tegelijk)
+
+
+#read raw texts
+start <- Sys.time()
+text <- readtext(paste0('./docs/raw/*.txt'),
+                 docvarsfrom = "filenames", 
+                 docvarnames = c("year", "type", "language", "company"),
+                 dvsep = "_")
+eind <- Sys.time()
+str(text)
+tijd <- eind - start
+tijd
+fwrite(text, file = "texts.txt")
+
+#read new docvars to text file
+company_names <- read_excel("company_names.xlsx")
+
+#remove allo numericals and join docvars
+texts <- text %>% 
+  mutate(text = stri_trans_general(text, id = "Latin-ASCII"),
+         text = stringi::stri_replace_all_regex(text, "[\\d]", "")) 
+
+texts <- texts %>% left_join(.,company_names, by = c( "company" = "company"))
+str(texts)
+
+#create corpus, hash and convert to dataframe
+corp_sr <- corpus(texts)
+corphash <- corp_sr %>% corpus_segment(.,"##")
+textthought <- convert(corphash, to = "data.frame")
+
+
+#calculate statistics and merge with docvars and retailer names
+stats <- textstat_summary(corp_sr)
+stats <- stats %>% mutate(company = str_sub(document, 12,19), 
+                          year = str_sub(document, 1, 4),
+                          reptype = str_sub(document,6,7)) 
+write.csv(stats, file = "textstats.csv")
+save(stats, file = "stats.Rdata")
+
+#make list of retailer codes and export to excel and add retailer names
+
+companies <- unique(stats_meta$company)
+write.csv(companies, file = "companies.txt")
+
+#get retailer names
+retailer_overview <- stats %>% left_join(., company_names, by = c("company" = "company")) 
+save(retailer_overview, file = "retailstats.Rdata")
+
+#make table of retailers in sample
+retailer_overview %>% 
+  group_by(year, retailer) %>%
+  reframe(total_tokens = sum(tokens),
+          total_sentences = sum(sents),
+          reptype = reptype) %>%
+  ggplot(aes(year, total_tokens, fill = retailer)) +
+  geom_col() +
+  facet_grid(. ~ reptype)
+#make a table detailing which retailers did or did not publish AR/SR
+retailer_overview %>% filter(reptype %in% c("AR", "SR")) %>%
+  mutate(yes = ifelse(is.na(tokens), "no", "yes"),
+         logt = log(tokens+1)) %>%
+  ggplot(aes(year, retailer)) +
+  geom_raster(aes(fill = logt)) +
+  facet_wrap(. ~ reptype) +
+  labs(title = "Annual (AR) en sustainability (SR) reports of European food retailers", subtitle = "expressed as logarithm of word counts",
+       ) +
+  guides(fill = guide_legend("log word count"))
+
+#word stats of corpus
+library(knitr)
+library(janitor)
+library(kableExtra)
+table1 <- retailer_overview %>% group_by(year) %>%
+  reframe(total_tokens = sum(tokens),
+          total_sentences = sum(sents)) %>%
+  adorn_totals("row") 
+write.csv(table1, file = "table1.csv")
+
+cl <- company_names$retailer %>% tokens() %>% tokens_split() %>%
+  tokens_tolower() %>% unlist()
+words <- c("*-time", "*-timeUpdated", "GMT", "BST", "*.com", "ltd", "group", 
+           "holdings", "inc", "business","sek", "eur", "ica", "coop", 
+           "colruyt", "axfood", "ahold", "delhaize","biedronka", "jerónimo", "martíns",
+           "million", "appendix", "see", "axfood's", "gruppen's","co-op", "asda",
+           "aldi", "per", "year", "also", "can", "use", "chf", "finland",
+           "switzerland", "delhaize's", "years", "euro", "sweden", "kesko",
+           "spain", "steghaus", "mbb", "italian", "thanks", "new", "u.s.",
+           "transgourmet", "gmbh", "g.m.b.h.", "esselunga", "milan",
+           "euro", "naturama", "della", "banco", "alimentar", "co-operative",
+           "zurich", "basel", "bern", "franc", "billion", "italia",
+           "april", "januari", "u.", "adriatico", "belgium", 
+           "france", "swiss", "belgian", "virya","norgesgruppen",
+           "baltic", "kesko", "edeka", "sok", "pingo", "doce", "including",
+           "grupo", "tsr", "ltip", "gro", "senda", "merciali",
+           "euro", "number", "fabriquer", "fabrique", "myrhol", "alcochet",
+           "docidtextyeartypelanguagecompany", "euro", "willys", "hemköp",
+           "hjärtat", "rimi", "de-bremen", "de-seevet", "édition", "exco", 
+           "féral-schuhl" , "#beingcoop", "#eactiv", "-equival",
+           "may", "product", "within", "#the", "#in", "annual", "report", "kesko's", 
+           "axfood's", "martins", "gruppen", "delhaize's", "penny", "monprix", "group's", 
+           "holding", "groep", "euros", "sainsbury's", "norgesgruppen's", "plc",
+           "cent", "mnok", "chf", "sek", "dkk", "eerd", "koninklijke", "portugal",
+           "portuguese", "german", "germany", "dutch", "ahold", "ingles", "basque",
+           "spain", "spanish", "dagab", "amba", "hemkop", "snabbgross", "agm",
+           "exito", "cdiscount", "euris", "monoprix", "franprix", "gpa", "groupe",
+           "stockholm", "swedish", "assai", "morrison", "british", "madrid", "netherlands",
+           "finnish", "estonia", "helsinki", "sainsbury", "argos", "pence", "yard",
+           "dusseldorf", "hervis", "slovenia", "austrian", "croatia", "hungary", "percent",
+           "heijn", "albert", "roc", "giant", "jmh", "sociedade", "dos", "santos", "lda",
+           "hebe", "recheio", "portugal", "ara", "poland", "thousand", "fastigheter",
+           "apotek", "hjartat", "swedish", "stockholm", "latvia", "netto", "norway", "norwegian",
+           "intro", "francs", "bell", "italy", "waitrose", "elo", "immo", "taiwan", "del", 
+           "valencia", "spanish", "der", "south", "north", "kiwi", "asko", "meny",
+           "ireland", "enseigne", "french", "argentina", "pirkka", "china", "mbh", "crr",
+           "therof", "korys", "halle", "okay", "dreambaby", "etn", "brazil", "romania", "click",
+           "banner", "say", "denmark", "luxembourg", "van", "march", "kevin", "kingdom",
+           "jmr", "brazilian", "dec", "denmark", "danish", "etc", "russia", "yes",
+           "ing", "excl", "tion", "nok", "francisco", "lithuania", "dats", "dreamland",
+           "usa", "lion", "manuel", "lisbon", "colombia", "colombian", "goes", "january", "subchapter",
+           "frans", "polish", "little", "big", "hypermarkets", "across", 
+           "thereof", "mike",  "pro", "forma", "get", "things", "december", "twelve", "nok", "therefore",
+           "want", "dansk", "aarhus", "danes", "irish", "schwarz", "krn", "via",
+           "norgesgruppens", "one", "two", "three", "pply", "iro", "appe", "gkf", "mmu",
+           "langeberga", "distribuicao", "retalho", "langeberga", "objekt", "vermogensverwaltungsgesellschaft",
+           "bvba", "edingensesteenweg", "parkwind", "sustainabilityeroski", "corporategovernance",
+           "hwwaal", "kiwifruittobeaufortcheese", "de", "uk", "limited", "co", 
+           "us", "make", "ab", "_sr_de_edeka", "feb", "citrino", "dominique", "econ", "houze", "keens", "kyytsonen" , "lars",
+           "gci", "imprint", "einkauf", "mploy", "nit", "nme", "ontents", "cedi", "blssp", "coe",
+           "anttila", "audi", "ade", "byggmaker", "fas", "ccgcr", "psc", "romagna", "scad", "omx", "adrs",
+           "christ", "eisberg", "hugli", "sqm", "exc", "lumimart", "parfumerie",
+            "eip", "pbgc", "psp", "rsp", "alan", "dnsh", "nfis", "opex", "jul", "suomen",
+           "byggmakker", "ations", "aspiag", "aragon", "edem", "herrero", "roig",
+           "balearic", "catalonia", "mercialys", "rallye", "autorite", "amf", "sendas", "centro")
+length(unique(company_names$retailer))
+
+#define dictionary
+dict <- dictionary(list(fairtrade = c("fairtrade", "havelaar", "altromercato"),
+                        organic = c("organic", "demeter", "biologic", "krav", "ecocert", "demeter", "biosuisse", "utz", "msc", "krav", "naturland", "organic farming", "organic production"),
+                        sdg01=c("no poverty", "end poverty", "poverty"),
+                        sdg02=c("end hunger", "hunger", "food security", "improved nutrition", "sustainable agriculture"),
+                        sdg03=c("good health", "well-being", "healthy lives"),
+                        sdg04=c("education", "inclusive education", "lifelong learning"),
+                        sdg05=c("gender equality", "empower women and girls", "gender diversity", "cultural diversity", "lhbtqi", "sexual harassment", "sexual intimidation", "lhbti"),
+                        sdg06=c("clean water", "sanitation"),
+                        sdg07=c("sustainable energy", "affordable energy", "clean energy", "reliable energy"),
+                        sdg08=c("sustainable economic growth", "decent work", "inclusive growth", "economic growth", "ilo", "freedom of association", "trade unions", 
+                                "living wage"),
+                        sdg09=c("resilient infrastructure","inclusive industrialization", "sustainable industrialization", "innovation"),
+                        sdg10=c("reduced inequalities"),
+                        sdg11=c("sustainable cities"),
+                        sdg12=c("sustainable consumption", "responsible consumption", "sustainable production", "fatty acids", "sugar", "carbohydrates", "protein", "fruit", "vegetables"),
+                        sdg13=c("climate action", "climate change", "climate change impact", "ghg", "greenhouse", "greenhouse gas", "greenhouse gas emissions", "climate adaptation", "climate mitigation",
+                                "carbon", "carbon neutral"),
+                        sdg14=c("life below water", "marine resources", "ocean resources", "marine biodiversity", "sustainable fisheries", "ocean conservation",
+                                "small-scale fishers", "fish", "marine stewardship"),
+                        sdg15=c("life on land", "biodiversity loss", "resilient ecosystems", "land degradation","desertification", "erosion"),
+                        sdg16=c("peace", "justice", "strong institutions"),
+                        sdg17=c("partnership", "sustainable development", "tax strategy", "GRI 207", "approach to tax", "country by country"),
+                        sdg = c("sdg", "sdgs", "sustainable development goals", "global compact", "2030 agenda", "communication on progress"),
+                        waste = c("food waste", "plastic waste", "food miles", "microplastic", "particulate matter"),
+                        supply =c("supply chain", "food miles"),
+                        human_rights = c("human rights", "modern slavery", "living wages", "salary matrix",
+                                         "labor conditions", "collective bargaining", "grievance mechanism", "black colleagues"),
+                        certification = c("rainforest alliance", "utz", "biosuisse", "fairtrade", "organic", "demeter", "planetproof"),
+                        various = c( "black & scholes", "mental wellbeing", "black communities",
+                                     "ethnic communities", "international cooperation",
+                                     "sustainable soya", "convenience store", "sustainability targets",
+                                     "local products", "international organisations", "registration document",
+                                     "regional products", "sustainability indicators", "healthy food", "farm to fork",
+                                     "added value", "raw materials", "organic agriculture", "small producers", "food store", "customer needs", 
+                                     "small farmers", "palm oil", "animal welfare", "sustainable palm oil", "rspo", "local communities",
+                                     "codex alimentarius", "food safety", "forced labor", "safety audits", "plastic waste",
+                                     "fruit and vegetables", "plastic recycling", "occupational health", "sustainable products",
+                                     "ethical code", "ethical trade initiative", "fresh products", "corona crisis", "best before", "sell by",
+                                     "circular economy", "important issues", "supplier audits", "packaging materials", "global challenges",
+                                     "meat alternatives", "plant-based", "environmentally-friendly", "young talent",
+                                     "community support", "supplier audit", "genetically modified", "novel foods",
+                                     "meat replacement", "meat alternative", "eu taxonomy", "local suppliers", "local trade",
+                                     "eu taxonomy", "food service", "esg performance", "free range", "drinking water", 
+                                     "environmental policy", "social policy", "food stores", "food products", "healthy food"),
+                        financial = c( "risk management", "audit committee", "board of directors", "profit and loss", "code of conduct",
+                                       "non governmental organizations", "consumer organizations", 
+                                       "executive director", "executive committee", "remuneration committee", "internal audit",
+                                       "quality standards", "corporate responsibility", "corporate social responsibility",
+                                       "related parties", "environmental impact", "tax rate", "fair value", "consolidated statements",
+                                       "financial statements", "share capital", "cash flow", "cash deposits",
+                                       "tax liabilities", "tax income", "consolidated income", "dow jones", "corporate governance",
+                                       "financial instruments", "share price", "audit opinion", "internal control", "listed companies",
+                                       "general meeting", "time period", "target-based", "collective bargaining agreement",
+                                       "maternity leave", "deferred taxes", "net operating profit",
+                                       "earnings before interest and taxes", "civil code", "sales growth", "pension plan",
+                                       "growth strategy", "market share", "code of conduct", "private label", "real estate",
+                                       "fair share", "like for like", "financial information", "growth strategy", "digital transformation",
+                                       "business model", "recognized income", "grocery store", "grocery stores","value chain",
+                                       "key indicators", "key performance indicators", "supply chains", "going concern", "home delivery", "strategic objective",
+                                       "strategic targets", "chief executive officer", "chief financial officer", "price increase", "price increases",
+                                       "joint venture", "joint ventures", "online shopping", "value creation", "data protection", "defined benefit", "defined contribution",
+                                       "data security", "management approach", "distribution center", "distribution centre", "supervisory board",
+                                       "auditors' opinion", "auditor's report", "ghg emissions", "operating companies", "cash tax", "service point",
+                                       "sales income", "limited company", "interest rate", "tax rate", "tax planning", "net operating profit",
+                                       "head office", "future value", "intangible assets", "first place", "tax reporting", "deferred taxes",
+                                       "code of conduct", "governance code", "material misstatement", "universal registration document"
+                                       )))
+
+#gehashte tekst tokenizeren
+
+#tokenize
+toks_hash <- corphash %>%
+  tokens(.) %>%
+  tokens_select(max_nchar = 20) %>% #this takes out a lot of glued junk
+  tokens_compound(.,dict) %>% #but saves compounding creating longer words, needing n = 2
+  tokens_remove(pattern = cl) %>%
+  tokens_remove(pattern = words) %>%
+  tokens_remove(stopwords("english")) %>%
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, 
+         remove_numbers = TRUE, remove_url = TRUE) %>% 
+  tokens_remove(pattern = "\\p{Z}", valuetype = "regex") %>% #take out non-ASCII
+  tokens_remove(pattern = "'s", valuetype = "regex") %>% 
+  tokens_remove(pattern = "-+", valuetype = "regex") %>% 
+  tokens_remove(pattern = "#.+", valuetype = "regex") %>%
+  tokens_remove(pattern = "www.+", valuetype = "regex") %>%
+  tokens_select(min_nchar = 3) # takes out abbreviations 
+  
+
+#check docvars and number of hashed docs
+docvars(toks_hash)
+ndoc(toks_hash)
+
+#make dfm (some sampled, some whole, some subsetted, some converted to stm)
+dfm_w <- dfm(toks_hash)
+dim(dfm_w)
+#replace common plurals by singular (lemmatization)
+plural <- c("activities", "customers", "shares", "agreements", "stores", 
+            "shops", "services", "employees", "risks", "increased", "supply chains",
+            "dialog", "reusable", "recyclable", "leases", "recognised", "environmental",
+            "colleagues", "supplier", "emission", "companies", "plans", "corrections",
+            "sustainability", "actions", "supermarkets", "stakeholder", "bosses", "lessees",
+            "systems", "abilities")
+singular <- c( "activity", "customer", "share", "agreement", "store", 
+               "shops", "service", "employee", "risk", "increase", "supply chain",
+               "dialogue", "reuse", "recycle", "lease", "recognized", "environment",
+               "colleague", "suppliers", "emissions", "company", "plan", "correction",
+               "sustainable", "action", "supermarket", "stakeholders", "boss", "lessee",
+               "system", "ability")
+
+dfm_w <- dfm_w %>% dfm_replace(., pattern = plural, replacement = singular)
+dfm_sr <- dfm_w %>% 
+  dfm_remove(stopwords("english")) %>% 
+  dfm_trim(min_termfreq = 0.00001, termfreq_type = "prop") %>% #keuze voor 1E-5 of 1E-6
+  dfm_subset(ntoken(.) > 0) 
+dim(dfm_sr)
+textstat_frequency(dfm_w, n = 100) 
+dim(dfm_sr)[1]
+
+
+dfm_select(dfm_w, min_nchar = 25) #this shows the filter works well - no junk left
+#dfm_sr <- dfm_w #%>% dfm_subset(type == "SR")
+# create a subsample DFM for fast  searchK analysis 
+dfm_sample <- dfm_sr %>% dfm_sample(.,size = 10000)
+dfmsamplestm <- convert(dfm_sample, to = "stm")
+
+dfmstm <- dfm_sr %>% convert(., to = "stm")
+
+
+#do searchK analysis to determine best K. 
+storage<-searchK(dfmsamplestm$documents, 
+                 dfmsamplestm$vocab, 
+                 K = c(10,20,30,40, 50), 
+                 prevalence=~ s(year) + type, 
+                 data = dfmsamplestm$meta,
+                 set.seed(9999), 
+                 verbose=TRUE)
+print(storage$results)
+options(repr.plot.width=12, repr.plot.height=12)
+plot(storage)
+
+#plotting Exclusivity versus Semantic Coherence
+
+model10<-stm(dfmsamplestm$documents, 
+             dfmsamplestm$vocab, 
+             K = 10, 
+             prevalence=~ s(year) + type, 
+             data = dfmsamplestm$meta,
+             init.type = "Spectral",
+             set.seed(9999), 
+             verbose=TRUE)
+
+model20<-stm(dfmsamplestm$documents, 
+             dfmsamplestm$vocab, 
+             K = 20, 
+             prevalence=~ s(year) + type , 
+             data = dfmsamplestm$meta,
+             init.type = "Spectral",
+             set.seed(9999), 
+             verbose=TRUE)
+model30 <-stm(dfmsamplestm$documents, 
+              dfmsamplestm$vocab, 
+              K = 30, 
+              prevalence=~ s(year) + type , 
+              data = dfmsamplestm$meta,
+              init.type = "Spectral",
+              set.seed(9999), 
+              verbose=TRUE)
+
+model40<-stm(dfmsamplestm$documents, 
+             dfmsamplestm$vocab, 
+             K = 40, 
+             prevalence=~ s(year) + type, 
+             data = dfmsamplestm$meta,
+             init.type = "Spectral",
+             set.seed(9999), 
+             verbose=TRUE)
+
+suppressWarnings(library(ggplot2))
+suppressWarnings(library(plotly))
+
+M10ExSem<-as.data.frame(cbind(c(1:10),exclusivity(model10), semanticCoherence(model=model10, dfmsamplestm$documents), "Mod10"))
+M20ExSem<-as.data.frame(cbind(c(1:20),exclusivity(model20), semanticCoherence(model=model20, dfmsamplestm$documents), "Mod20"))
+M30ExSem<-as.data.frame(cbind(c(1:30),exclusivity(model30), semanticCoherence(model=model30, dfmsamplestm$documents), "Mod30"))
+M40ExSem<-as.data.frame(cbind(c(1:40),exclusivity(model40), semanticCoherence(model=model40, dfmsamplestm$documents), "Mod40"))
+
+ModsExSem<-rbind(M10ExSem, M20ExSem, M30ExSem, M40ExSem)
+colnames(ModsExSem)<-c("K","Exclusivity", "SemanticCoherence", "Model")
+
+ModsExSem$Exclusivity<-as.numeric(as.character(ModsExSem$Exclusivity))
+ModsExSem$SemanticCoherence<-as.numeric(as.character(ModsExSem$SemanticCoherence))
+
+options(repr.plot.width=7, repr.plot.height=7, repr.plot.res=100)
+
+plotexcoer<-ggplot(ModsExSem, aes(SemanticCoherence, Exclusivity, color = Model))+geom_point(size = 2, alpha = 0.7) + 
+  geom_text(aes(label=K), nudge_x=.05, nudge_y=.05)+
+  labs(x = "Semantic coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence")
+
+plotexcoer
+
+#select K and make a full model
+
+
+model30full <-stm(dfmstm$documents, 
+              dfmstm$vocab, 
+              K = 30, 
+              prevalence=~ s(year) + type , 
+              data = dfmstm$meta,
+              init.type = "Spectral",
+              set.seed(9999), 
+              verbose=TRUE)
+save(model30full,file = "model30full.Rdata")
+
+summary(model30full)
+plot(model30full)
+str(model30full$theta)
+#print topics to txt file
+sink(file = "retail30_8txt")
+labelTopics(model30full, c(1:30))
+sink()
+lt <- labelTopics(model30full)
+lt_terms <- data.frame(topic = 1:30, probability = as.vector(lt$prob), FREX = as.vector(lt$frex))
+#topic correlation
+tc <- topicCorr(model30full, method = c("huge"), cutoff = 0.01, verbose = TRUE)
+plot(tc)
+
+
+#model with different covariates
+model30owner <-stm(dfmstm$documents, 
+                  dfmstm$vocab, 
+                  K = 30, 
+                  prevalence=~ s(year) + ownership, 
+                  data = dfmstm$meta,
+                  init.type = "Spectral",
+                  set.seed(9999), 
+                  verbose=TRUE)
+
+
+model30ownertype <-stm(dfmstm$documents, 
+                   dfmstm$vocab, 
+                   K = 30, 
+                   prevalence=~ type + ownership, 
+                   data = dfmstm$meta,
+                   init.type = "Spectral",
+                   set.seed(9999), 
+                   verbose=TRUE)
+summary(model30ownertype)
+
+model30otc <-stm(dfmstm$documents, 
+                       dfmstm$vocab, 
+                       K = 30, 
+                       prevalence=~ type + ownership + country, 
+                       data = dfmstm$meta,
+                       init.type = "Spectral",
+                       set.seed(9999), 
+                       verbose=TRUE)
+
+summary(model30otc)
+# estimate effect of regression meta variables
+prep <- estimateEffect(
+  1:30 ~ s(year) + type,
+  model30full,
+  metadata = dfmstm$meta
+)
+str(prep)
+summary(prep)
+
+
+prep2 <- estimateEffect(
+  1:30 ~ type + ownership, 
+  model30ownertype,
+  metadata = dfmstm$meta
+)
+
+summary(prep2)
+
+prep3 <- estimateEffect(
+  1:30 ~ type + ownership + country, 
+  model30otc,
+  metadata = dfmstm$meta
+)
+regres <- summary(prep3)
+regres$topics[1]
+
+
+regres$tables[n]
+
+t <- regres$tables[1]  %>% 
+  bind_rows()
+
+
+sink(file = "regres.txt")
+regres$tables
+sink()
+#print topics to txt file
+sink(file = "retail30_10.txt")
+labelTopics(model30otc, c(1:30))
+sink()
+length(unique(texts$retailer))
+
+#plot the evolution of topics over time (or other factor)
+
+library(stminsights)
+effects <- get_effects(estimates = prep,
+                       variable = 'year',
+                       type = 'pointestimate')
+#sort most recent topic from high to low
+topiclabels <- read_delim("topic_labels.csv", 
+                          delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+#check topic labels if correcet before applying them
+effects$topic <- factor(effects$topic, levels=c(1:30),
+               labels=topiclabels$label)
+
+topiclabels$label
+S_code <- topiclabels %>% filter(code == "S") %>% pull(label) #filter sustainability topics
+S_code
+#test of het klopt
+effects %>% filter(topic == 'sustainable products')
+
+unique(effects$value)
+
+#select n most interesting topics in last year(most prominent)
+
+toptencsv <- effects %>% filter(value == "2022" & as.character(topic) %in% S_code) %>% 
+  arrange(desc(proportion)) %>%
+  slice_head(n = 10)
+write.csv(toptencsv, file = "topten.csv")
+
+
+topfive <- effects %>% filter(value == "2022" & as.character(topic) %in% S_code) %>% 
+  slice_max(proportion, n = 6) %>% pull(topic)
+(topfive)
+
+topten <- effects %>% filter(value == "2022" & as.character(topic) %in% S_code) %>% 
+  slice_max(proportion, n = 12) %>% pull(topic)
+topten
+
+
+dev.off()
+#make a line graph of most prominent topics
+library(ggthemes)
+p<- effects %>% filter(topic %in% topfive & value != "2022" & topic != "gri reporting") %>%
+  mutate(value = as.numeric(value)+2014) %>%
+ggplot(aes(value, proportion, col = topic)) +
+  geom_line(linewidth = 1)
+p + labs(x = "year", y = "topic proportion") +
+  theme_stata() +
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"))
+p + geom_ribbon(aes(ymin= lower, ymax = upper), 
+                linetype=1, alpha = 0.1)
+
+p2<- effects %>% filter(topic %in% topten ) %>%
+  mutate(value = as.numeric(value)+2014) %>%
+  ggplot(aes(value, proportion)) +
+  geom_line(linewidth = 1)
+p2 + labs(x = "year", y = "topic proportion") +
+  theme_stata() +
+  scale_y_continuous(breaks = c(0, 0.02, 0.04, 0.06)) +
+  facet_wrap(. ~ topic, nrow = 3) +
+  geom_ribbon(aes(ymin= lower, ymax = upper), 
+                linetype=1, alpha = 0.1)
+  
+
+library(ggthemes)
+#make a bar graph of all topics
+p1 <- effects %>% ggplot(aes(x=value, y=proportion, fill = topic)) +
+  geom_bar(stat = "identity", position = "stack") + theme_minimal()
+p1 
+
+#make a line graph wrapped
+
+p2 <- effects %>%  
+  ggplot(aes(x=value, y=proportion, group = 1)) +
+  geom_line() 
+p2 + facet_wrap(. ~topic)
+
+#find thoughts
+#maak een tekstvector die overeenkomst met de dfm die voor het model is gebruikt
+#met alle documenten in dezelfde volgorde
+names(toks_hash)
+docnames(dfm_w)
+ndoc(dfm_w)
+
+#de documenten namen halen uit dfm_w en joinen op het tekstbestand
+findtext <- textthought %>% filter(doc_id %in% docnames(dfm_w)) %>% 
+  pull(text)
+findtext <- as_tibble(docnames(dfm_w)) %>% 
+  left_join(textthought, by = c("value"="doc_id")) %>%
+  select(text) %>%
+  as.vector()
+
+t30 <- findThoughts(
+  model30full,
+  texts = findtext$text,
+  topics = 30,
+  n = 10,
+  thresh = NULL,
+  where = NULL,
+  meta = NULL
+)
+
+
+
+#effects 3
+effects_otc <- get_effects(estimates = prep3,
+                       variable = 'country',
+                       type = 'pointestimate')
+#sort most recent topic from high to low
+topiclabels <- read_delim("topic_labels.csv", 
+                          delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+effects$topic <- factor(effects$topic, levels=c(1:30),
+                        labels=topiclabels$label)
+topiclabels$label
+#test of het klopt
+effects %>% filter(topic == 'certified products')
+
+unique(effects$value)
+
+#select n most interesting topics in last year(most prominent)
+effects %>% filter(value == "2022" ) %>% 
+  arrange(desc(proportion)) %>%
+  slice_head(n = 5)
+
+topfive <- effects_otc %>% group_by(topic) %>%
+  reframe(sum = sum(proportion)) %>%
+  slice_max(sum, n = 5) %>% pull(topic)
+topfive
+
+dev.off()
+#make a line graph of most prominent topics
+p<- effects_otc %>% filter(topic %in% topfive) %>%
+  ggplot(aes(value, proportion, fill = topic)) +
+  geom_col(linewidth = 1)
+p
+p + geom_col(aes(ymin= lower, ymax = upper), 
+                linetype=1, alpha = 0.1)
+

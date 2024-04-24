@@ -1,0 +1,296 @@
+if (!require('readtext')) install.packages('readtext')
+if (!require('readr')) install.packages('readtr')
+if (!require('stringr')) install.packages('stringr')
+if (!require('stringi')) install.packages('stringi')
+if (!require('tidyverse')) install.packages('tidyverse')
+if (!require('stm')) install.packages('stm')
+if (!require('quanteda')) install.packages('quanteda')
+
+library(readtext)
+library(readr)
+library(stringr)
+library(stringi)
+library(tidyverse)
+library(stm)
+library(quanteda)
+library(broom)
+library(quanteda.textstats)
+library(data.table)
+library(readxl)
+
+#BEGIN VANAF HIER
+#read file list to check
+fl <- list.files('./docs/raw')
+company_names <- read_excel("company_names.xlsx") 
+report_list <- data.frame(name = substr(fl, 12, 19), year = substr(fl, 1,4)) 
+reports <- company_names %>% 
+  inner_join(. , report_list, by =c("company"= "name")) %>%
+  mutate(year = as.numeric(year)) %>%
+  arrange(year, retailer)
+reports %>% count(retailer, year) 
+write_csv2(reports, file = "reports.csv")
+
+
+write_csv2(retailers_list, "retailerslist.txt")
+#met notepad++ via regex in elk bestand elke 25 regels een ## aangebracht (in alle documenten tegelijk)
+
+
+#read raw texts
+whole <- paste0('./docs/raw/*.txt')
+split <- paste0('./splitdocs/*.txt')
+
+text <- readtext(split,
+                 docvarsfrom = "filenames", 
+                 docvarnames = c("year", "type", "language", "company"),
+                 dvsep = "_")
+# Remove the last 4 characters from each file name
+text$company <- gsub("\\.txt$", "", text$company)
+
+# Remove all instances of "'s" from the 'text' column
+text$text <-gsub("\\b(\\w+)'s\\b", "", text$text)
+
+
+fwrite(text, file = "texts.txt")
+texts <- text %>%
+  mutate(text = as.character(text),  # Ensure text is a character vector
+         text = stri_trans_general(text, id = "Latin-ASCII"),
+         text = stringi::stri_replace_all_regex(text, "[\\d]", ""),
+         text = str_replace_all(text, "(?<=\\S)(?=\\s)|\\b", " "))
+
+texts$ownership <- reports$ownership
+#for better granularity it is better to split the documents in smaller pieces, e.g. pages.
+texts <- texts %>% select(-c("language", "docvar5")) 
+
+
+
+#create corpus
+corp_sr <- corpus(texts)
+head(docvars(corp_sr),10)
+corp_en <- corpus_segment(corp_sr, pattern = "##", valuetype = "fixed",
+                          pattern_position = "after", extract_pattern = FALSE)
+save(corp_en, file = "corp_en.Rdata")
+
+
+#calculate statistics and merge with docvars and retailer names
+stats <- textstat_summary(corp_sr)
+write.csv(stats, file = "textstats.csv")
+
+
+#read company names(based on cross table made from file list )
+
+
+stats_meta  <- stats %>% cross_join(.,docmeta) 
+companies <- unique(stats_meta$company)
+write.csv(companies, file = "companies.txt")
+stats_meta %>% left_join(., company_names, by = c("company" = "company")) 
+save(stats_meta, file = "stats.Rdata")
+
+
+#define words to replace
+find <- c("houses", "assets", "reports", "risks", "store", "customer", "share", "director",
+          "recognised", "note", "matter", "goal", "standard", "boss", 
+          "colleague", "charity")
+
+replaceby <- c("house", "asset", "report", "risk", "stores", "customers", "shares", "directors",
+           "recognized", "notes", "matters", "goals", "standards", "bosses",
+           "colleagues", "charities")
+
+replace_frame <- data.frame(find = find, replaceby = replaceby)
+
+
+cl <- company_names$retailer %>% tokens() %>% tokens_split() %>%
+  tokens_tolower() %>% unlist()
+words <- c("*-time", "*-timeUpdated", "GMT", "BST", "*.com", "ltd", "group", 
+           "holdings", "inc", "business","sek", "eur", "ica", "coop", 
+           "colruyt", "axfood", "ahold", "delhaize","biedronka", "jerónimo", "martíns",
+           "million", "appendix", "see", "axfood's", "gruppen's","co-op", "asda",
+           "aldi", "per", "year", "also", "can", "use", "chf", "finland",
+           "switzerland", "delhaize's", "years", "euro", "sweden", "kesko",
+           "spain", "steghaus", "mbb", "italian", "thanks", "new", "u.s.",
+           "transgourmet", "gmbh", "g.m.b.h.", "esselunga", "milan",
+           "euro", "naturama", "della", "banco", "alimentar", "co-operative",
+           "zurich", "basel", "bern", "franc", "billion", "italia",
+           "april", "januari", "u.", "adriatico", "belgium", 
+           "france", "swiss", "belgian", "virya","norgesgruppen",
+           "baltic", "kesko", "edeka", "sok", "pingo", "doce", "including",
+           "grupo", "tsr", "ltip", "gro", "senda", "merciali",
+           "euro", "number", "fabriquer", "fabrique", "myrhol", "alcochet",
+           "docidtextyeartypelanguagecompany", "euro", "willys", "hemköp",
+           "hjärtat", "rimi", "de-bremen", "de-seevet", "édition", "exco", 
+           "féral-schuhl" , "#beingcoop", "#eactiv", "-equival",
+           "may", "product", "within", "#the", "#in", "annual", "report", "kesko's", 
+           "axfood's", "martins", "gruppen", "delhaize's", "penny", "monprix", "group's", 
+           "holding", "groep", "euros", "sainsbury's", "norgesgruppen's", "plc",
+           "cent", "mnok", "chf", "sek", "dkk", "eerd", "koninklijke", "portugal",
+           "portuguese", "german", "germany", "dutch", "ahold", "ingles", "basque",
+           "spain", "spanish", "dagab", "amba", "hemkop", "snabbgross", "agm",
+           "exito", "cdiscount", "euris", "monoprix", "franprix", "gpa", "groupe",
+           "stockholm", "swedish", "assai", "morrison", "british", "madrid", "netherlands",
+           "finnish", "estonia", "helsinki", "sainsbury", "argos", "pence", "yard",
+           "dusseldorf", "hervis", "slovenia", "austrian", "croatia", "hungary", "percent",
+           "heijn", "albert", "roc", "giant", "jmh", "sociedade", "dos", "santos", "lda",
+           "hebe", "recheio", "portugal", "ara", "poland", "thousand", "fastigheter",
+           "apotek", "hjartat", "swedish", "stockholm", "latvia", "netto", "norway", "norwegian",
+           "intro", "francs", "bell", "italy", "waitrose", "elo", "immo", "taiwan", "del", 
+           "valencia", "spanish", "der", "south", "north", "kiwi", "asko", "meny",
+           "ireland", "enseigne", "french", "argentina", "pirkka", "china", "mbh", "crr",
+           "therof", "korys", "halle", "okay", "dreambaby", "etn", "brazil", "romania", "click",
+           "banner", "say", "denmark", "luxembourg", "van", "march", "kevin", "kingdom",
+           "jmr", "brazilian", "dec", "denmark", "danish", "etc", "russia", "yes",
+           "ing", "excl", "tion", "nok", "francisco", "lithuania", "dats", "dreamland",
+           "usa", "lion", "manuel", "lisbon", "colombia", "colombian", "goes", "january", "subchapter",
+           "frans", "polish", "little", "big", "hypermarkets", "across", 
+           "thereof", "mike",  "pro", "forma", "get", "things", "december", "twelve", "nok", "therefore",
+           "want", "dansk", "aarhus", "danes", "irish", "schwarz", "krn", "via",
+           "norgesgruppens", "one", "two", "three", "pply", "iro", "appe", "gkf", "mmu",
+           "langeberga", "distribuicao", "retalho", "langeberga", "objekt", "vermogensverwaltungsgesellschaft",
+           "bvba", "limited", "well", "since", "und", "die", "gruppen", "med", "til",
+           "we’re", "we’ve", "distribuição", "non", "fotex", "supermarked", "axfoodannualandsustainabilityreport",
+           "edingensesteenweg", "financialstatements", "corporategovernance", "businessreview", "whether_due",
+           "norges", "mat", "cus", "tomers", "indd", "barcelona", "baumarkt", "interspar",
+           "eoly", "collishop", "cru", "selgros", "halba", "naturaplan", "hilcona", "solucious",
+           "roig", "totaler", "caprabo", "juan", "bioland", "touristik", "ses",
+           "reals", "kespro", "fas", "hemtex", "belarus", "volkswagen", "onninen",
+           "rauta", "bol", "gall", "hannaford", "southeastern", "serbia", "united states", "emte",
+           "colruytgroup", "zeb", "symeta", "iii", "sub", "philipp", "toom", "log", "joker",
+           "trumf", "ers", "custom", "garant", "vege", "tarian", "sustainabilityeroski",
+           "vegalsa", "stephane", "vice")
+length(unique(company_names$retailer))
+
+
+###DEFINE FREQUENT N-GRAMS
+
+#words to take out
+# company names
+company_dict <- dictionary(list(retailers = company_names$retailer))
+
+
+#TOKENIZE CORPUS TO FIND NGRAMS
+
+toksgrams <- corp_en %>% tokens() %>%
+  tokens_tolower() %>%
+  tokens_select(max_nchar = 35) %>%  #this takes out a lot of glued junk
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, 
+         remove_numbers = TRUE, remove_url = TRUE) %>%
+  tokens_remove(pattern = company_dict, valuetype = "fixed") %>%
+  tokens_select(pattern = stopwords("en"), selection = "remove") %>%
+  tokens_remove(pattern = words) %>% #take out diverse junk words
+  tokens_replace("\\b(\\w+)'s\\b", "\\1", valuetype = "regex") %>%
+  tokens_replace(replace_frame$find, replace_frame$replaceby, valuetype = "fixed") %>% # do some lemmatization
+  tokens_remove(pattern = "\\bfy\\d{4}\\b", valuetype =  "regex") %>% #removes "fy____" mentions
+  tokens_remove(pattern = "\\p{Z}|'s|-+|#.+|www.+|\\b\\w{1,2}\\b", valuetype = "regex")
+
+toks_ngrams <- toksgrams %>% tokens_ngrams(n=2:4)
+dfm_grams <- dfm(toks_ngrams)
+kwic(toks_ngrams, pattern = "united_nations")
+
+# Create a frequency table of ngrams
+freq_table <- textstat_frequency(dfm_grams) %>% filter(frequency > 500 & docfreq > 25) %>%
+  arrange(desc(frequency)) # filter words that appear at least 50 times and in at least 50 docs 500 is an adequate threshold
+
+
+freq_table %>% arrange(frequency) %>% mutate(drop = "no") %>%
+  write.csv2(.,"freq_table.txt")
+#do a manual review of synonyms and reload 
+
+library(readxl)
+ngrams <- read_excel("ngrams.xlsx")
+ngram_reviewed <- ngrams %>% filter(drop == "no")
+ngram_out <- ngrams %>% filter(drop != "no")
+ngrams_ <- gsub("_", " ", ngram_reviewed$feature)
+ngrams_out_ <- gsub("_", " ", ngram_out$feature)
+
+"materiality materiality" %in% ngrams_out_
+
+
+# Create a quanteda dictionary
+dict_ngrams <- dictionary(list(ngrams = ngrams_))
+#colloc_out <- dictionary(list(ngrams_out = ngrams_out_)) # is a dictionary of the words dropped from the ngrams
+#colloc_out
+dict_ngrams
+save(dict_ngrams, file =  "dict+ngrams.Rdata")
+# Show the resulting dictionary
+print(dict_ngrams)
+
+
+
+#define dictionary
+dict <- dictionary(list(
+                        sdg01=c("no poverty", "end poverty", "poverty"),
+                        sdg02=c("end hunger", "hunger", "food security", "improved nutrition", "sustainable agriculture"),
+                        sdg03=c("good health", "well-being", "healthy lives"),
+                        sdg04=c("education", "inclusive education", "lifelong learning"),
+                        sdg05=c("gender equality", "empower women and girls", "gender diversity", "cultural diversity", "lhbtqi", "sexual harassment", "sexual intimidation"),
+                        sdg06=c("clean water", "sanitation"),
+                        sdg07=c("sustainable energy", "affordable energy", "clean energy", "reliable energy"),
+                        sdg08=c("sustainable economic growth", "decent work", "inclusive growth", "economic growth", "ilo", "freedom of association", "trade unions", 
+                                "living wage"),
+                        sdg09=c("resilient infrastructure","inclusive industrialization", "sustainable industrialization", "innovation"),
+                        sdg10=c("reduced inequalities"),
+                        sdg11=c("sustainable cities"),
+                        sdg12=c("sustainable consumption", "responsible consumption", "sustainable production", "fatty acids", "sugar", "carbohydrates", "protein", "fruit", "vegetables"),
+                        sdg13=c("climate action", "climate change", "climate change impact", "ghg", "greenhouse", "greenhouse gas", "greenhouse gas emissions", "climate adaptation", "climate mitigation",
+                                "carbon", "carbon neutral"),
+                        sdg14=c("life below water", "marine resources", "ocean resources", "marine biodiversity", "sustainable fisheries", "ocean conservation",
+                                "small-scale fishers", "fish", "marine stewardship"),
+                        sdg15=c("life on land", "biodiversity loss", "resilient ecosystems", "land degradation","desertification", "erosion"),
+                        sdg16=c("peace", "justice", "strong institutions"),
+                        sdg17=c("partnership", "sustainable development", "tax strategy", "GRI 207", "approach to tax", "country by country"),
+                        sdg = c("sdg", "sdgs", "sustainable development goals", "global compact", "2030 agenda", "communication on progress")
+                        ))
+
+
+
+#a model on whole documents
+#tokenize
+toks <- corp_en %>%
+  tokens(.) %>%
+  tokens_tolower() %>%
+  tokens_compound(.,dict) %>%
+  tokens_compound(.,dict_ngrams) %>%
+  tokens_remove(pattern = cl) %>%
+  tokens_remove(pattern = words) %>%
+  tokens_remove(stopwords("english")) %>%
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, 
+         remove_numbers = TRUE, remove_url = TRUE) %>% 
+  tokens_remove(pattern = "\\p{Z}", valuetype = "regex") %>% #take out non-ASCII
+  tokens_replace(replace_frame$find, replace_frame$replaceby, valuetype = "fixed") %>% # do some lemmatization
+  tokens_replace("\\b(\\w+)'s\\b", "\\1", valuetype = "regex") %>%
+  tokens_remove(pattern = "-+", valuetype = "regex") %>% 
+  tokens_remove(pattern = "#.+", valuetype = "regex") %>%
+  tokens_remove(pattern = "www.+", valuetype = "regex") %>%
+  tokens_select(min_nchar = 3) 
+
+
+save(toks, file = "tokens_retail.Rdata")
+#make dfm based on tokens
+dfm <- dfm(toks) %>% 
+  dfm_remove(stopwords("english")) %>% 
+  dfm_trim(min_docfreq = 10, min_termfreq = 3, termfreq_type = "count") %>%
+  dfm_subset(ntoken(.) > 0)
+save(dfm, file = "dfm_retail.Rdata")
+kwic(toks, pattern = "vegetables")
+
+#search for bananas in whole documents
+#make tokenized coprus of whole dcuments
+toks_whole <- corp_sr %>%
+  tokens(.) %>%
+  tokens_tolower() %>%
+  tokens_compound(.,dict) %>%
+  tokens_compound(.,dict_ngrams) %>%
+  tokens_remove(pattern = cl) %>%
+  tokens_remove(pattern = words) %>%
+  tokens_remove(stopwords("english")) %>%
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, 
+         remove_numbers = TRUE, remove_url = TRUE) %>% 
+  tokens_remove(pattern = "\\p{Z}", valuetype = "regex") %>% #take out non-ASCII
+  tokens_replace(replace_frame$find, replace_frame$replaceby, valuetype = "fixed") %>% # do some lemmatization
+  tokens_replace("\\b(\\w+)'s\\b", "\\1", valuetype = "regex") %>%
+  tokens_remove(pattern = "-+", valuetype = "regex") %>% 
+  tokens_remove(pattern = "#.+", valuetype = "regex") %>%
+  tokens_remove(pattern = "www.+", valuetype = "regex") %>%
+  tokens_select(min_nchar = 3) 
+
+dict_banana <- dictionary(list(
+                          banana=c("banana", "bananas")))
+dfm_banana <- dfm(toks_whole) %>% dfm_lookup(., dict_banana) %>% convert(., to = "data.frame")
