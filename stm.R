@@ -1,31 +1,102 @@
 library(stm)
 library(tidyverse)
+library(quanteda.textstats)
+library(stats)
 
-dfm_stm <- dfm %>% 
-  dfm_select(., words, selection = "remove")  %>%
-  dfm_trim(min_termfreq = 10, 
-           min_docfreq = 3, termfreq_type = "count") %>%
-  convert(.,to = "stm")
+texten <- paste(M$TI) 
+texten
+keywords <- corpus(texten)
 
-rownames <- rownames(dfm_stm)
+remove_words <- c("sustainable_development_goals", "agenda", "sustainable development goals", "sustainable", "development", "goals")
 
-save(dfm_stm, file = "dfm_stm.Rdata")
-unique(docvars(dfm)$ownership)
+keywords
+tokens <- tokens(keywords) %>%
+  tokens_tolower() %>%
+  tokens_remove(stopwords("english")) %>%
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, 
+         remove_numbers = TRUE, remove_url = TRUE) %>%
+  tokens_remove(pattern = ";") %>%
+  tokens_select(min_nchar = 3)# takes out abbreviations 
+tokens <- tokens_remove()
+
+kwic(tokens, pattern = "reporting")
+
+#make a list of words to be sorted out based on tf_idf highest frequency
+dfm <- dfm(tokens)
+# Calculate the tf-idf weighting
+dfm_tfidf <- dfm_tfidf(dfm)
+
+# Convert the dfm_tfidf to a matrix
+tfidf_matrix <- as.matrix(dfm_tfidf)
+
+# Calculate the sum of tf-idf scores for each term
+tfidf_sum <- colSums(tfidf_matrix)
+
+# Get the top n terms based on tf-idf scores
+n <- 200 # Number of top terms
+top_terms <- names(sort(tfidf_sum, decreasing = TRUE)[1:n])
+words_out <- data.frame(words = top_terms, keep = "yes")
+write_csv2(words_out, file = "words_out.csv")
+
+#read words taken out
+library(readxl)
+word_out <- read_excel("word_out.xlsx") %>% filter(keep == "no") %>% pull(words)
+
+tokens <- tokens(keywords) %>%
+  tokens_tolower() %>%
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, 
+         remove_numbers = TRUE, remove_url = TRUE) %>%
+  tokens_remove(stopwords("english")) %>%
+  #tokens_remove(word_out, padding = TRUE) %>%
+  tokens_remove(remove_words, padding = TRUE) %>%
+  tokens_remove(pattern = ";") %>%
+  tokens_select(min_nchar = 3)# takes out abbreviations 
+
+kwic(tokens, pattern = "sustainable")
+tokens_ngrams <- tokens_ngrams(tokens, n= 2:3)
+dfm_ngrams <- dfm(tokens_ngrams)
+ngrams <- textstat_frequency(dfm_ngrams) %>% mutate(feature = str_replace_all(feature, "_", " ")) 
+
+threshold <- quantile(ngrams$frequency, probs = 0.9)
+ngrams <- ngrams %>% filter(frequency > threshold) 
+
+dict_n <- dictionary(list(compound = ngrams$feature))
+dict_n
+
+tokens <- tokens(keywords) %>%
+  tokens_tolower() %>%
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, 
+         remove_numbers = TRUE, remove_url = TRUE) %>%
+  tokens_remove(stopwords("english")) %>%
+  tokens_remove(remove, padding = TRUE) %>%
+  tokens_compound(.,dict_n, join = TRUE) %>%
+  tokens_remove(remove_words, padding = TRUE) %>%
+  tokens_remove(pattern = c(";", ".")) %>%
+  tokens_remove(pattern = "'s", valuetype = "regex") %>% 
+  tokens_select(min_nchar = 3)# takes out abbreviations 
+
+dfm <- dfm(tokens) 
+
+  dim(dfm)
+
+
+dfm_stm <- dfm %>% convert(.,to = "stm")
+dfm_stm
+#save(dfm_stm, file = "dfm_stm.Rdata")
+
 set.seed(100)
-range <- c(5L, 10L, 15L, 20L, 25L, 30L, 40L, 50L)
+range <- seq(10,25, by = 1)
 
 many_models <- tibble(K = range) %>%
   mutate(topic_model = map(K, ~stm(dfm_stm$documents,
                                    dfm_stm$vocab,
                                    data = dfm_stm$meta, 
                                    K = .,
-                                   prevalence = ~ year + ownership,
-                                   verbose = TRUE)))
+                                   verbose = TRUE,
+                                   emtol = 1e-05)))
 
-
-
-save(many_models, file = "retailers_5_50.Rdata")
-#load("retailers_5_50.Rdata")
+save(many_models, file = "sdg_litrev_5_50.Rdata")
+   #load("sdg_litrev_5_50.Rdata")
 heldout <- make.heldout(dfm_stm$documents, dfm_stm$vocab)
 
 k_result <- many_models %>%
@@ -62,13 +133,13 @@ k_result %>%
   mutate(K = as.factor(K)) %>%
   ggplot(aes(semantic_coherence, exclusivity, color = K)) +
   geom_point(size = 3, alpha = 1) +
-  geom_rect(aes(xmin = -Inf, xmax = -70, ymin = -Inf, ymax = Inf), fill = "grey90", alpha = 0.01, col = NA) +
+  geom_rect(aes(xmin = -Inf, xmax = -200, ymin = -Inf, ymax = Inf), fill = "grey90", alpha = 0.01, col = NA) +
   geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 8.75), fill = "grey90", alpha = 0.01, col = NA) +
   labs(x = "Semantic coherence",
        y = "Exclusivity",
        title = "",
        subtitle = "")
-ggsave("semex_frags5-100.png", width = 12, dpi = 300, units = "cm", bg = "white")
+ggsave("semex_frags5-50.png", width = 12, dpi = 300, units = "cm", bg = "white")
 
 
 #extract top themes
@@ -79,7 +150,7 @@ topic_model <- k_result %>%
   pull(topic_model) %>% 
   .[[1]]
 summary(topic_model)
-
+kwic(tokens, pattern = "impossible")
 
 td_beta <- tidytext::tidy(topic_model, matrix = "beta")
 td_gamma <- tidytext::tidy(topic_model, matrix = "gamma",
@@ -159,71 +230,92 @@ table_gt <- gamma_terms %>%
 
 table_gt
 gtsave(table_gt, file = "table_frags.html")
+kwic(tokens, pattern = "addressing")
 
+library(scales)
+gamma_terms %>%
+  top_n(10, gamma) %>%
+  ggplot(aes(topic, gamma, label = highest_prob, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(hjust = 0, nudge_y = 0.0005, size = 5) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.15),
+                     labels = percent_format()) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 13)) +
+  labs(x = NULL, y = expression(gamma),
+       title = "Top 20 topics by prevalence",
+       subtitle = "With the top words that contribute to each topic")
 
+docvars <- docvars(dfm)
+docvars <- data.frame(document = 1:nrow(docvars), year = docvars$year)
+gamma_year <- td_gamma %>% left_join(., docvars)
+library(ggplot2)
 
+# Assuming your data frame is named 'df'
+
+# Calculate the average gamma values per topic per year
+avg_gamma <- aggregate(gamma ~ topic + year, data = gamma_year, FUN = mean)
+
+topic_select <- aggregate(gamma ~topic, data = gamma_year, FUN = mean) %>% top_n(10)
+avg_gamma1 <- avg_gamma %>% left_join(., custom_labels) %>% filter(topic %in% topic_select$topic & year > 2019) 
+
+# Create the ggplot
+# Create the ggplot
+ggplot(avg_gamma1, aes(x = as.integer(year), y = gamma, group = topic, fill = titles)) +
+  geom_col(position = "stack") + 
+  labs(x = "Year", y = "Average Gamma") +
+  theme_minimal()
 
 # EXPLORE KEYWORDS IN CONTEXT
-load("tokens_retail.Rdata")
-kwic(toks, pattern = "banana", window = 5)
+#load("tokens_retail.Rdata")
+kwic(toks, pattern = "perspective", window = 3)
 
-k_result$exclusivity[3]
+
 #estimate effects
 set.seed(100)
-effect <- estimateEffect(formula= ~ year + ownership, 
+effect <- estimateEffect(formula= ~ year, 
                          stmobj=topic_model, 
                          metadata=dfm_stm$meta,
                          prior = 1e-5)
 summary(effect)
+plot(effect, "year")
 save(effect, file = "effect.Rdata")
 
 
 
-
 docs_to_keep <- names(dfm_stm$documents)
-texts_ret <- corp_en %>% convert(.,to= "data.frame") %>%
-  mutate(docid = names(corp_en)) %>% 
-  subset(.,docid %in% docs_to_keep) %>%
+texts_ret <- corp %>% convert(.,to= "data.frame") %>% 
+  subset(.,doc_id %in% docs_to_keep) %>%
+  select(text)
+
+texts_ret <- keywords %>% convert(.,to= "data.frame") %>% 
+  subset(.,doc_id %in% docs_to_keep) %>%
   select(text)
 
 
-findThoughts(topic_model, texts = texts_ret$text, topics = 1, n = 3, thresh = 0.05)
-
-
-
-
-
-
-
-
-
-
-
-
-
+findThoughts(topic_model, texts = texts_ret$text, topics = 3, n = 3, thresh = 0.05)
 
 
 #CORRELATION PLOTS
 library(ggplot2)
 library(huge)
 # Assuming mod.out.corr is your list of correlation matrices
-mod.out.corr <- topicCorr(topic_model, method = "huge")
+mod.out.corr <- topicCorr(topic_model, method = "huge", cutoff = 0, verbose = TRUE)
 plot(mod.out.corr)
 
 library(igraph)
 
 # Assuming mod.out.corr is your list of correlation matrices
 
-
-
-print(topics)
-
 # Extract positive correlation matrix
 positive_corr <- mod.out.corr$poscor
-
+mod.out.corr$cor
 # Create an adjacency matrix with only positive correlations
-adj_matrix <- as.matrix(positive_corr > 0)
-
+adj_matrix <- as.matrix(mod.out.corr$cor > 0)
+adj_matrix
 # Create an igraph graph from the adjacency matrix
 graph <- graph.adjacency(adj_matrix, mode = "undirected", weighted = TRUE)
 
@@ -250,36 +342,30 @@ plot(graph, layout = layout.fruchterman.reingold,
 # Custom labels for top topics (replace with your own labels)
 # Create a data frame with topic (numeric) and title (character)
 custom_labels <- data.frame(
-  topic = 1:20,
+  topic = 1:aantal,
   titles = c(
-    "Stores Growth and Market Expansion",
-    "Corporate Governance and Board Members",
-    "Product Quality and CSR Initiatives",
-    "Company Performance and Sustainability",
-    "Financial Reporting and Governance",
-    "Risk Management and Compliance",
-    "Financial Assets and Taxation",
-    "Employee Training and Support",
-    "Audit and Financial Statements",
-    "Community Support and Engagement",
-    "Financial Profits and Equity",
-    "Sustainability in Work and Supply Chains",
-    "Remuneration and Performance Plans",
-    "Asset Valuation and Impairment",
-    "Sustainable Products and Consumer Preferences",
-    "Corporate Strategy and Operations",
-    "Environmental Impact and Waste Management",
-    "Sustainable Production and Certification",
-    "GRI Reporting and Stakeholder Engagement",
-    "Financial Risk and Derivatives"
+    "Perspectives Circular Economy",
+    "Disclosure Innovation Implementing",
+    "Business Contribution Spanish",
+    "Global United Nations Impact",
+    "Reporting Collaboration Investigation",
+    "United Nations Private Actors",
+    "Entrepreneurship Mapping Learning",
+    "Company International Importance",
+    "Model Companies Brazilian",
+    "Social Companies Pandemic",
+    "Practices Value Aligned",
+    "Achieve Tourism Social Entrepreneurship",
+    "Environmental Economic Countries",
+    "Role Implementation Partnerships",
+    "Mining Strategy Impacts",
+    "Framework CSR Higher Education",
+    "Strategies Contributing Evaluation",
+    "Assessing Integrating Smart",
+    "Assessment System Progress",
+    "Higher Education Financial Advancing"
   )
 )
-
-
-# Display the data frame
-print(topics)
-
-
 
 # Set up a color scale with higher contrast
 color_scale <- colorRampPalette(c("white", "darkred"))  # Adjust the color range
@@ -292,15 +378,15 @@ mean_thetas <- td_gamma %>%
 # Create a color vector based on the mean thetas
 vertex_colors <- color_scale(length(mean_thetas))[cut(mean_thetas, length(mean_thetas))]
 
-set.seed(105)
+set.seed(132)
 # Plot the corplot with colored vertices
 corplot_f <- plot(graph, layout = layout.fruchterman.reingold, 
-                  vertex.color = vertex_colors, vertex.size = 10, 
+                  vertex.color = vertex_colors, vertex.size = 11, 
                   vertex.label = custom_labels$titles,
-                  vertex.label.dist = 2, vertex.label.cex = 0.7,
+                  vertex.label.dist = 1, vertex.label.cex = 0.6,
                   edge.color = "darkgreen", edge.width = 1.5,
                   vertex.label.family = "Arial",
-                  vertex.label.dist = 4, vertex.label.cex = 5,
+                  vertex.label.dist = 1, vertex.label.cex = 5,
                   main = "")
 
 # Plot the network
@@ -311,10 +397,12 @@ plot(graph, layout = layout.fruchterman.reingold,
      main = "", 
      vertex.label = custom_labels$titles)  # Use custom labels as vertex labels
 
-
-
-
-
+# use LDAvis to explore topics
+library(LDAvis)
+library(servr)
+json <- toLDAvis(topic_model, dfm_stm$documents, R = 30, 
+                 out.dir = "C:/Users/hwwaal/projects/SDG_LITREV/LDAVis",
+                 open.browser = T)
 
 
 
